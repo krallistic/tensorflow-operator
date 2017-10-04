@@ -92,15 +92,98 @@ def build_nodes_spec_string(spec, type):
         spec_string += str(type) + "-" + str(i) + "." + str(namespace) + "cluster.local:2222"
     return spec_string
 
-def build_ps_nodes_spec_string(spec):
-    pass
 
 def create_tensorflow_training(spec):
     log.msg("Creating Tensorflow training")
     worker_spec = build_nodes_spec_string(spec, "worker")
     ps_spec = build_nodes_spec_string(spec, "ps")
+    for i in range(int(spec['spec']['worker_nodes'])):
+        print("Creating worker-" + str(i))
+        generate_service_spec(spec, "worker", i )
+        generate_job_spec(spec, "worker", i)
+
+        
+    
+    for i in range(int(spec['spec']['ps_nodes'])):
+        print("Creating worker-" + str(i))
+        generate_job_spec(spec, "ps", i)
+        generate_service_spec(spec, "ps", i )
+
+
 
     print("Worker Spec: ", worker_spec, ps_spec)
+
+def generate_name(spec, node_type, node_index):
+    return spec['metadata']['name'] + "-" + node_type + "-" + str(node_index)
+
+def generate_labels(spec, node_type, node_index):
+    return {
+            "app": "tensorflow",
+            "node-type": str(node_type),
+            "task-index": str(node_index),
+            "name" : spec['metadata']['name']
+            }
+
+def generate_service_spec(spec, node_type, node_index):
+    log.msg("Generating Service Object for " + str(node_type) + " " + str(node_index))
+    v1 = client.CoreV1Api()
+    service = client.V1Service()
+    service.kind = "Service"
+    service.api_version = "core/V1"
+    service.metadata = client.V1ObjectMeta(name=generate_name(spec, node_type, node_index), 
+                                            labels=generate_labels(spec, node_type, node_index))
+    service_spec = client.V1ServiceSpec()
+    port = client.V1ServicePort(port=2222)
+    service_spec.ports = [ port ] 
+    selector = client.V1LabelSelector(match_labels=generate_labels(spec, node_type, node_index))
+    service_spec.selector = selector
+    service.spec = service_spec
+    print(service.to_dict())
+    v1.create_namespaced_service(namespace=spec['metadata']['namespace'], body=service)
+
+def generate_arguments(spec, node_type, node_index):
+    return [
+            "--job-name=" + node_type,
+            "--task-index=" + str(node_index),
+            "--ps-tasks=" + build_nodes_spec_string(spec, "ps"),
+            "--worker-tasks" + build_nodes_spec_string(spec, "worker"),
+            #TODO 
+        ] + spec['spec']['additional_args']
+
+def generate_job_spec(spec, node_type, node_index):
+    log.msg("Generating Worker Spec")
+    extension = client.ExtensionsV1beta1Api()
+    deployment = client.ExtensionsV1beta1Deployment()
+    deployment.api_version = "extensions/v1beta1"
+    deployment.kind = "Deployment"
+    deployment.metadata = client.V1ObjectMeta(labels=generate_labels(spec, node_type, node_index),
+                                                name=generate_name(spec, node_type, node_index))
+    deployment_spec = client.ExtensionsV1beta1DeploymentSpec()
+    deployment_spec.replicas = 1
+
+    deployment_spec.template = client.V1PodTemplateSpec()
+    deployment_spec.template.metadata = client.V1ObjectMeta(labels=generate_labels(spec, node_type, node_index))
+    deployment_spec.template.spec = client.V1PodSpec()
+
+    container = client.V1Container()
+    container.name="tensorflow"
+    container.image=spec['spec']['image']
+
+
+
+    container.args = generate_arguments(spec, node_type, node_index)
+    if spec['spec']['port']:
+        port = spec['spec']['port']
+    else:
+       port = 2222 
+
+    container.ports = [client.V1ContainerPort(container_port=port)]
+
+    deployment_spec.template.spec.containers = [container]
+    deployment.spec = deployment_spec
+    print("Creating Deployment")
+    extension.create_namespaced_deployment(namespace=spec['metadata']['namespace'], body=deployment)
+
 
 def update_tensorflow_training(spec):
     log.msg("Update Training, delete existing first")
