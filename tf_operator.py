@@ -65,15 +65,7 @@ def main():
         if False:
             w.stop()
 
-    v1 = client.CoreV1Api()
-    count = 10
-    w = watch.Watch()
-    for event in w.stream(v1.list_namespace, _request_timeout=60):
-        log.msg("Watching kubernetes API")
-        print("Event: %s %s" % (event['type'], event['object'].metadata.name))
-        count -= 1
-        if not count:
-            w.stop()
+    log.msg("Watch closed")
 
 
 def build_nodes_spec_string(spec, type):
@@ -89,7 +81,7 @@ def build_nodes_spec_string(spec, type):
 
     spec_string = ""
     for i in range(count):
-        spec_string += str(type) + "-" + str(i) + "." + str(namespace) + "cluster.local:2222"
+        spec_string += str(type) + "-" + str(i) + "." + str(namespace) + ".cluster.local:2222"
     return spec_string
 
 
@@ -129,16 +121,15 @@ def generate_service_spec(spec, node_type, node_index):
     v1 = client.CoreV1Api()
     service = client.V1Service()
     service.kind = "Service"
-    service.api_version = "core/V1"
+    service.api_version = "v1"
     service.metadata = client.V1ObjectMeta(name=generate_name(spec, node_type, node_index), 
                                             labels=generate_labels(spec, node_type, node_index))
     service_spec = client.V1ServiceSpec()
     port = client.V1ServicePort(port=2222)
     service_spec.ports = [ port ] 
-    selector = client.V1LabelSelector(match_labels=generate_labels(spec, node_type, node_index))
-    service_spec.selector = selector
+
+    service_spec.selector = generate_labels(spec, node_type, node_index)
     service.spec = service_spec
-    print(service.to_dict())
     v1.create_namespaced_service(namespace=spec['metadata']['namespace'], body=service)
 
 def generate_arguments(spec, node_type, node_index):
@@ -146,7 +137,7 @@ def generate_arguments(spec, node_type, node_index):
             "--job-name=" + node_type,
             "--task-index=" + str(node_index),
             "--ps-tasks=" + build_nodes_spec_string(spec, "ps"),
-            "--worker-tasks" + build_nodes_spec_string(spec, "worker"),
+            "--worker-tasks=" + build_nodes_spec_string(spec, "worker"),
             #TODO 
         ] + spec['spec']['additional_args']
 
@@ -192,6 +183,34 @@ def update_tensorflow_training(spec):
 
 def delete_tensorflow_training(spec):
     log.msg("Deleting Tensorflow Training")
+    for i in range(int(spec['spec']['worker_nodes'])):
+        print("Deleting worker-" + str(i))
+        delete_stuff(spec, "worker", i )
+ 
+    
+    for i in range(int(spec['spec']['ps_nodes'])):
+        print("Deleting PS-" + str(i))
+        delete_stuff(spec, "ps", i)
+
+
+def delete_stuff(spec, node_type, node_index):
+    extension = client.ExtensionsV1beta1Api()
+    deployment = client.ExtensionsV1beta1Deployment()
+    deployment.api_version = "extensions/v1beta1"
+    deployment.kind = "Deployment"
+    deployment.metadata = client.V1ObjectMeta(labels=generate_labels(spec, node_type, node_index),
+                                                name=generate_name(spec, node_type, node_index))
+    extension.delete_namespaced_deployment(name=generate_name(spec, node_type, node_index), namespace=spec['metadata']['namespace'], body=client.V1DeleteOptions(propagation_policy="Foreground", grace_period_seconds=5))
+    
+    v1 = client.CoreV1Api()
+
+    service = client.V1Service()
+    service.kind = "Service"
+    service.api_version = "v1"
+    service.metadata = client.V1ObjectMeta(name=generate_name(spec, node_type, node_index), 
+                                            labels=generate_labels(spec, node_type, node_index))
+
+    v1.delete_namespaced_service(name=generate_name(spec, node_type, node_index), namespace=spec['metadata']['namespace'], body=client.V1DeleteOptions(propagation_policy="Foreground", grace_period_seconds=5))
 
 
 if __name__ == '__main__':
