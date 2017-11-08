@@ -1,0 +1,11 @@
+kind: tensorflow
+apiVersion: "krallistic.github.com/v1alpha1"
+metadata:
+  name: owner
+spec:
+  worker_nodes: 3
+  ps_nodes: 2
+  image: TODO:latest
+  port: 2222
+  additional_args:
+    - "--version"
